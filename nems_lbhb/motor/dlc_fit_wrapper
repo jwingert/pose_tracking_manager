@@ -1,0 +1,11 @@
+#!/bin/bash
+
+echo "Starting dlc_fit_wrapper"
+source ~/.bash_login
+echo "$PATH"
+
+conda activate dlc5
+
+python $*
+
+echo "Done"

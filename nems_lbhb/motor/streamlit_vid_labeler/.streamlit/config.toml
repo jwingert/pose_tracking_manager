@@ -1,0 +1,13 @@
+# Animal Tracking Tracker theme -- read ONCE, at startup, by `streamlit run` started from
+# this folder (a running server keeps its old theme until restarted).
+#
+# 60-30-10: 60% cool near-black page, 30% cool slate panels/inputs, 10% icy-blue accent
+# on everything interactive. Green / amber / red are reserved for STATUS -- a button's
+# outcome after a click, and ⚠ tags -- never decoration.
+# labeler_core.THEME mirrors these values for the colours set in CSS.
+[theme]
+base = "dark"
+primaryColor = "#7DD3FC"
+backgroundColor = "#0B1119"
+secondaryBackgroundColor = "#18222F"
+textColor = "#E3EAF2"

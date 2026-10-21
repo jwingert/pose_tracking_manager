@@ -1,0 +1,36 @@
+# [AGENT EDIT START | agent: Codex | user: wingertj | reason: keep local environments, credentials, and generated tracking data out of the showcase repository | date: 2026-10-20]
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.idea/
+.vscode/
+.DS_Store
+.env
+.env.*
+!.env.example
+secrets.toml
+*_settings_local.py
+.dlc_labeler_prefs.json
+*.log
+*.h5
+*.hdf5
+*.pickle
+*.pkl
+*.npy
+*.npz
+*.avi
+*.mp4
+*.mov
+*.ckpt*
+*.pt
+*.pth
+*.index
+*.data-?????-of-?????
+# [AGENT EDIT END]

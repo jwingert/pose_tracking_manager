@@ -1,0 +1,99 @@
+#!/bin/bash
+# [AGENT EDIT START | agent: claude | user: wingertj | reason: the deployed checkout at
+# /auto/users/lbhb/Code/nems_db is from 2025-12-18 and has none of the lifecycle modules,
+# so every queued job silently ran pre-release code | date: 2026-08-17]
+#
+# DEVELOPMENT wrapper: runs queued DLC jobs against wingertj's live checkout.
+#
+# Two things must point at the live tree, not one:
+#   * the SCRIPT path (labeler_core.script_path)
+#   * `import nems_lbhb`, which otherwise resolves through dlc5's easy-install.pth to
+#     /auto/users/lbhb/Code/nems_db -- the stale checkout. PYTHONPATH precedes
+#     site-packages in sys.path, so prepending here wins.
+#
+# conda is activated by sourcing conda.sh at a fixed path rather than via ~/.bash_login:
+# the queue runs as `lbhb` (who has one) but a human testing by hand may not, and the
+# silent failure mode is `conda activate` erroring and the job continuing under whatever
+# python is on PATH. `conda activate` is required, not optional -- dlc5's
+# activate.d/env_vars.sh is what puts $CONDA_PREFIX/lib on LD_LIBRARY_PATH, without which
+# TensorFlow cannot load libcudnn and silently falls back to CPU.
+#
+# The job still runs as `lbhb` in `dlc5`; only the code it executes changes. Set
+# USE_DEV_CODE = False in labeler_core once the deployed checkout is updated.
+
+set -u
+echo "Starting dlc_fit_wrapper_dev (DEVELOPMENT code path)"
+
+DEV_ROOT=/auto/users/wingertj/nems_db
+
+# Which conda env runs the job. dlc5 is the default because it is what the PRODUCTION
+# wrapper uses: keeping it means dev and production differ only in the code path, so a
+# failure here is attributable to the code rather than to the environment. streamlit_dlc
+# is equivalent (DLC 2.3.6, same libcudnn, same activate.d/env_vars.sh) and is wholly
+# under wingertj's control, which may matter now that jobs run as wingertj rather than
+# lbhb -- switch by changing these two lines together.
+CONDA_ENV=dlc5
+CONDA_BASE=/auto/users/lbhb/Code/miniconda3
+# CONDA_ENV=streamlit_dlc
+# CONDA_BASE=/auto/users/wingertj/miniconda3
+
+if [ -f "$CONDA_BASE/etc/profile.d/conda.sh" ]; then
+    # conda.sh dereferences PS1, which `set -u` turns into a fatal error in a
+    # non-interactive shell; give it one rather than dropping the strictness.
+    PS1=${PS1:-}
+    # shellcheck disable=SC1090
+    source "$CONDA_BASE/etc/profile.d/conda.sh"
+else
+    echo "FATAL: $CONDA_BASE/etc/profile.d/conda.sh not found" >&2
+    exit 1
+fi
+
+# dlc5's activate.d/env_vars.sh appends to LD_LIBRARY_PATH without a default, which
+# `set -u` makes fatal when it is unset (as it is under the queue). Seed it.
+export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}
+if ! conda activate "$CONDA_ENV"; then
+    echo "FATAL: could not activate $CONDA_ENV" >&2
+    exit 1
+fi
+
+export PYTHONPATH=$DEV_ROOT:${PYTHONPATH:-}
+
+echo "  code:       $DEV_ROOT"
+echo "  git commit: $(git -C "$DEV_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+echo "  env:        $CONDA_ENV"
+echo "  python:     $(which python)"
+python - <<'PYCHK'
+import sys
+import traceback
+try:
+    import nems_lbhb
+except Exception:                                                          # noqa: BLE001
+    # NOT necessarily "modules missing" -- this has fired on an unwritable shared log
+    # dir, which has nothing to do with the checkout. Show the real reason.
+    print("  nems_lbhb:  FAILED TO IMPORT")
+    traceback.print_exc()
+    sys.exit(2)
+print("  nems_lbhb:  " + nems_lbhb.__file__)
+try:
+    from nems_lbhb.motor import (dlc_registry, dlc_release, dlc_alias,
+                                 dlc_train_guard, dlc_fit_record)          # noqa: F401
+    print("  lifecycle:  ok")
+except Exception as exc:                                                   # noqa: BLE001
+    print("  lifecycle:  MISSING (%s: %s)" % (type(exc).__name__, exc))
+    sys.exit(3)
+PYCHK
+rc=$?
+if [ $rc -eq 2 ]; then
+    echo "FATAL: nems_lbhb could not be imported at all (see traceback above);" >&2
+    echo "       this is an environment problem, not a missing checkout." >&2
+    exit 1
+elif [ $rc -ne 0 ]; then
+    echo "FATAL: $DEV_ROOT is missing the lifecycle modules; refusing to run" >&2
+    exit 1
+fi
+
+python "$@"
+status=$?
+echo "Done (exit $status)"
+exit $status
+# [AGENT EDIT END]

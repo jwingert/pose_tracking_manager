@@ -1,0 +1,342 @@
+# DeepLabCut model registry.
+#
+# This file is the single source of truth for "which DLC model analyzes which video".
+# It replaces the 45-line if/elif chain that used to live in
+# nems_lbhb/motor/nems_dlc_settings.get_dlc_model.  It is read by
+# nems_lbhb/motor/dlc_registry.py, which imports nothing but the standard library so
+# that py3.8 (streamlit_dlc), py3.9 (psi_nems2) and the production DLC env can all
+# load it.
+#
+# ORDER IS SEMANTICS.  resolve_for_video() walks the [alias.*] blocks in the order
+# they appear here, and each alias's `rules` list in order, and takes the FIRST match
+# -- exactly as the if/elif chain did.  The blocks below are in the legacy chain's
+# testing order.  Do not reorder them without re-running
+# tests/test_dlc_registry.py, which compares this registry against a frozen copy of
+# the pre-migration function over every video in the lab inventory.
+#
+# Predicate vocabulary understood by resolve_for_video (AND within one rule,
+# OR across the rules list):
+#   path_contains  str or list-of-str (list = OR)
+#   site_max       sitenum <= value      (inclusive)
+#   site_min       sitenum >= value      (inclusive)
+#   site_in        sitenum in list
+#   site_not_in    sitenum not in list
+#   animal         avipath.split('/')[4] == value  (or list = OR)  [no rule uses this yet]
+#   runclass       trailing _XXX token of the video stem            [no rule uses this yet]
+#
+# `sitenum` is int(avipath.split('/')[5][3:]) -- see _site_number() in dlc_registry.py
+# for why that index is hard-coded and why it is evaluated eagerly.
+#
+# `current` is the frozen release id this alias serves in production.  While it is
+# "" the alias resolves straight to its live training project (source='project').
+# Task 6 cuts the real releases and fills these in.
+#
+# `train_frame_size = [w, h]` is OPTIONAL and defaults to [640, 480]
+# (dlc_registry.DEFAULT_TRAIN_FRAME_SIZE).  It is the frame size the alias's
+# labelled data is at, and nems_lbhb/motor/dlc_video_scale.py uses it to decide
+# whether a video must be downscaled before inference: a ResNet pose model has no
+# scale invariance to spare, and 13 legacy Prince sites (Nov 2022 - Feb 2023) were
+# recorded at 1280x720 where every arena project's labelled frames are 640x480.
+# On PRN043a05 that costs the worst rigid marker 0.334 tracked at native vs 0.848
+# on a 640x360 copy.  It is a property of the model's TRAINING DATA, which is why
+# it lives on the alias instead of being a constant in the fit script.
+# Rescaling only ever fires when a video is LARGER than this; it never upscales.
+
+schema_version = 1
+
+# maxiters: measured, not assumed. The 2026-08-09 run of the merged right-chimney model
+# to 200000 iterations showed held-out error PLATEAUS after ~50000: test error sat in a
+# 6.76-7.64 px noise band from 50k to 200k (6.97 at 50k vs 6.76 at 200k -- 0.21 px for 4x
+# the training, with 150k coming in WORSE than 50k), while train error nearly halved
+# 4.19 -> 2.29. That is overfitting as a widening gap rather than a validation rise.
+# An earlier argument from DLC's learning-rate schedule -- [[0.005,10000],[0.02,430000],
+# [0.002,730000],[0.001,1030000]], so a 60000-iteration run never reaches a decay step --
+# predicted a real gain from training longer. It did not materialise on this dataset.
+# 100000 sits past the plateau with headroom, without spending 10 GPU-hours per retrain.
+# saveiters 25000 with max_snapshots_to_keep 10 keeps every checkpoint so the snapshot is
+# still chosen from the evaluation curve rather than by position.
+# --- per-session camera overrides ------------------------------------------------------
+# psi names its video files after the camera SLOT, not the content.  When a USB port
+# re-enumerates between sessions the slots swap, and the top-down ceiling view lands in a
+# file called video_side/video_side2 while `recording.avi` holds something else.  Nothing
+# in the file names, the trial log or celldb records that, so it has to be asserted here.
+#
+# Each entry names the video that actually holds the ceiling view for one session, and the
+# psi camera slot it was recorded on.  The slot matters for ALIGNMENT: baphy_io builds one
+# PSIVIDEO stream per slot from that slot's `psivideo_*_frames_written`, and
+# baphy_io.load_dlc_trace picks the stream from the cam tag in the DLC filename
+# (recording.avi -> no tag -> PSIVIDEO,  |  video_side.avi -> camB  |  video_side2.avi -> camC).
+#
+# `dlc_fit_script` consults this before choosing which video to analyse, so a re-run cannot
+# silently go back to the wrong camera.  Verify by eye across all files at matched
+# wall-clock times before adding an entry -- frame counts and fps alone do not identify a
+# view.
+[camera_override]
+
+[camera_override.REI084a10_a_NFB]
+video = "video_side2.avi"
+cam_tag = "camC"
+verified_by = "wingertj"
+verified_date = "2026-08-12"
+note = """\
+A port re-enumeration put the FACE camera in recording.avi (640x480, 100 fps, 168101 \
+frames) and the ceiling view in video_side2.avi (640x480, 30 fps, 50429 frames). \
+Confirmed visually across all three files at five matched wall-clock times. The original \
+DLC output was the top-down body model run on the face camera and is quarantined as \
+sorted/INVALID_facecam_*; see the session's README.CAMERA_SWAP. video_side.avi was NOT \
+verified. Files were deliberately NOT renamed: psi's per-slot frame-count columns follow \
+the slot, so renaming would break the file<->column correspondence that alignment uses."""
+
+
+[training_defaults]
+net_type = "resnet_50"
+augmenter_type = "imgaug"
+max_snapshots_to_keep = 10
+saveiters = 25000
+maxiters = 100000
+displayiters = 100
+autotune = false
+allow_growth = true
+
+
+# --- 1 -------------------------------------------------------------------------
+# legacy: elif 'video_pupil' in avipath
+# No train_frame_size: eyecloseup's labelled images are hand-cropped eye ROIs of
+# many different sizes (312x202 ... 684x468), so "the frame size this model was
+# trained at" is not a well-defined number for it.  The [640, 480] default is
+# inert here anyway -- every video_pupil.avi in the tree is 640x480 native, and
+# rescaling only fires on a video LARGER than the declared size.
+[alias.pupil]
+description = "Pupil / eyelid close-up camera."
+project = "/auto/data/dlc/eyecloseup"
+current = "pupil-r0001"
+history = [
+  "pupil-r0001",
+]
+geometry = { stream = ["pupil"] }
+qc = "none"
+bodyparts = ["lidtop", "lidleft", "lidbottom", "lidright", "pupiltop", "pupilleft", "pupilbottom", "pupilright"]
+rules = [
+  { path_contains = "video_pupil" },
+]
+
+
+# --- 2 -------------------------------------------------------------------------
+# legacy: elif 'PRN00'|'PRN01'|'PRN02'|'PRN03' in avipath
+# Single chimney, left hemisphere; back of implant instead of rear headpost.
+[alias.left_chimney]
+description = "Prince, single chimney, LH (back-of-implant marker)."
+# The alias's training home moved to the merged left-hemisphere project (2026-08-18):
+# PRN + REI + SQD labels, 271 frames, iteration-2. Inference is untouched -- `current`
+# still serves r0001, cut from the old left_chimney_PRNfb project -- but curation,
+# training and the Update tab's default all belong to the successor now.
+project = "/auto/data/dlc/merged_left_chimney-jcw-2026-08-10"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "left_chimney-r0001"
+history = [
+  "left_chimney-r0001",
+]
+geometry = { chimney = ["left"], audio = ["free-field"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "back", "leftear", "rightear", "shoulders", "midriff", "rear"]
+rules = [
+  { path_contains = ["PRN00", "PRN01", "PRN02", "PRN03"] },
+]
+
+
+# --- 3 -------------------------------------------------------------------------
+# legacy: elif 'PRN04'|'PRN05'|'PRN06'|'PRN07' in avipath
+[alias.right_chimney]
+description = "Prince, single chimney, RH (back-of-implant marker)."
+project = "/auto/data/dlc/right_chimney_PRNfb-svd-2023-11-30"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "right_chimney-r0001"
+history = [
+  "right_chimney-r0001",
+]
+geometry = { chimney = ["right"], audio = ["free-field"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "back", "leftear", "rightear", "shoulders", "midriff", "rear"]
+rules = [
+  { path_contains = ["PRN04", "PRN05", "PRN06", "PRN07"] },
+]
+
+
+# --- 4 -------------------------------------------------------------------------
+# legacy: elif 'LemonDisco/training' or 'SlipperyJack/training' in avipath
+# NOTE: this branch is UNREACHABLE through the router -- see [known_issues].eager_site_parse.
+# The rules are transcribed faithfully anyway; the alias is still selectable by name.
+[alias.behavior_only]
+description = "Free-moving, no chimney (headpost visible)."
+project = "/auto/data/dlc/free_train-svd-2023-09-26"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "behavior_only-r0001"
+history = [
+  "behavior_only-r0001",
+]
+geometry = { chimney = ["none"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "headpost", "leftear", "rightear", "shoulders", "midriff", "rear"]
+rules = [
+  { path_contains = "LemonDisco/training" },
+  { path_contains = "SlipperyJack/training" },
+]
+
+
+# --- 5 -------------------------------------------------------------------------
+# legacy: elif 'SlipperyJack/SLJ' or 'LemonDisco/LMD' in avipath
+[alias.two_chimney]
+description = "Two chimneys, tether entry points, back-of-implant marker."
+project = "/auto/data/dlc/two_chimney3fb-svd-2024-01-10"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "two_chimney-r0002"
+history = [
+  "two_chimney-r0001",
+  "two_chimney-r0002",
+]
+geometry = { chimney = ["two"], audio = ["free-field"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "back", "leftear", "rightear", "shoulders", "midriff", "rear"]
+rules = [
+  { path_contains = "SlipperyJack/SLJ" },
+  { path_contains = "LemonDisco/LMD" },
+]
+
+
+# --- 6 -------------------------------------------------------------------------
+# legacy: elif ('StinkySquid/SQD' & site<=20)
+#              or ('Reishi/REI' & site<=42 & site not in [68,70,74])
+#              or 'StinkySquid/training2024'
+# The `site_not_in` on the REI rule is redundant given site_max = 42, but it is
+# transcribed because removing it would be a change, not a migration.
+# The 'StinkySquid/training2024' rule is unreachable -- see [known_issues].
+[alias.right_chimney_pokes]
+description = "Right chimney in LB-1, with extra points for anipose and the reward ports."
+project = "/auto/data/dlc/right_chimney_LB1_pokes-jcw-2024-10-22"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "right_chimney_pokes-r0001"
+history = [
+  "right_chimney_pokes-r0001",
+]
+geometry = { chimney = ["right"], audio = ["free-field"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["nose", "front", "headpost", "leftear", "rightear", "shoulders", "frontleftpaw", "frontrightpaw", "midriff", "rear", "backleftpaw", "backrightpaw", "midtail", "tiptail", "frontleftport", "frontcenterport", "frontrightport", "backport"]
+rules = [
+  { path_contains = "StinkySquid/SQD", site_max = 20 },
+  { path_contains = "Reishi/REI", site_max = 42, site_not_in = [68, 70, 74] },
+  { path_contains = "StinkySquid/training2024" },
+]
+
+
+# --- 7 -------------------------------------------------------------------------
+# legacy: elif ('Reishi/REI' & 42 < site <= 86 & site in [68,70,74])
+# `42 < sitenum` is written as site_min = 43: sitenum is always an int (it is the
+# result of int()), so the two are exactly equivalent.
+[alias.left_chimney_headphones]
+description = "REI left hemisphere with headphones, old cameras."
+# Training home renamed 2026-08-23 (was headphones_left_chimney_LB1_pokes-jcw-2025-04-22):
+# "pokes" named the port-tracking models, and the right-hemisphere folders were split
+# out to merged_right_chimney_headphones. Deployed releases are unaffected.
+project = "/auto/data/dlc/left_chimney_headphones-jcw-2025-04-22"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "left_chimney_headphones-r0004"
+history = [
+  "left_chimney_headphones-r0001",
+  "left_chimney_headphones-r0003",
+  "left_chimney_headphones-r0004",
+]
+geometry = { chimney = ["left", "right"], audio = ["in-ear"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "back", "leftheadphone", "rightheadphone", "shoulders", "midriff", "rear"]   # r0004 (2026-08-26) dropped the four port markers; r0001-r0003 emit 11
+rules = [
+  { path_contains = "Reishi/REI", site_min = 43, site_max = 86, site_in = [68, 70, 74] },
+]
+
+
+# --- not routed by path --------------------------------------------------------
+# `rules = []` below is LOAD-BEARING, not an omission.  These aliases are named by a
+# caller; they must never be reachable from a video path.
+#
+# For `face` that is simply how it is used: nems_lbhb/motor/face_fit_script.py names it.
+#
+# For `right_chimney_headphones` it is a constraint.  The legacy router RAISES
+# ValueError('No DLC model specified for this path') for StinkySquid sites above 20 --
+# rule 6 catches SQD only up to site 20 and nothing else matches SQD -- and
+# tests/test_dlc_registry.py locks that in against a frozen copy of the legacy function
+# over every video in the lab inventory.  Giving this alias a `path_contains =
+# "StinkySquid/SQD"` rule would start answering where the legacy chain raised, which is a
+# behaviour change, not a migration.  Whoever analyzes a right-chimney headphone session
+# passes `alias=right_chimney_headphones` explicitly (dlc_fit_script supports it).
+# No train_frame_size, for the same reason as `pupil`: multivid-CLL's labelled
+# images are 360x240 close-up crops, and this alias is driven by face_fit_script.py,
+# which does not go through dlc_fit_script's rescaling path at all.  Declaring
+# [360, 240] here would assert a downscale nobody has measured.
+[alias.face]
+description = "Face / lick close-up camera. Chosen explicitly by face_fit_script.py."
+project = "/auto/data/dlc/multivid-CLL-2022-01-14"
+current = "face-r0001"
+history = [
+  "face-r0001",
+]
+geometry = { stream = ["face"] }
+qc = "none"
+bodyparts = ["topeyelid", "bottomeyelid", "nose", "chin", "tongue", "ear", "whisker1"]
+rules = []
+
+# The project directory name says `left_chimney`; the geometry it was trained on is the
+# RIGHT chimney.  Its labelled sites are SQD022/024/028, all gPenetration.ear = 'L', and
+# the chimney is contralateral to the primary ear (dlc_geometry.chimney_side).  The alias,
+# not the project name, is what is true here; the full argument is in the release's
+# provenance_warning.
+[alias.right_chimney_headphones]
+description = "StinkySquid right chimney with headphones. Selected explicitly."
+# Training home moved to the dedicated merged right-headphone project (2026-08-18):
+# 160 frames / 6 SQD folders consolidated from both mixed headphone projects.
+# r0002 (2026-08-23) is cut from this project and now serves the alias.
+project = "/auto/data/dlc/merged_right_chimney_headphones-jcw-2026-08-18"
+train_frame_size = [640, 480]   # measured: every labelled frame in this project
+current = "right_chimney_headphones-r0002"
+history = [
+  "right_chimney_headphones-r0001",
+  "right_chimney_headphones-r0002",
+]
+geometry = { chimney = ["right"], audio = ["in-ear"], stream = ["arena"] }
+qc = "rigid"
+bodyparts = ["front", "back", "leftheadphone", "rightheadphone", "shoulders", "midriff", "rear"]   # r0002 (2026-08-23) dropped the four port markers
+rules = []
+
+
+# --- known issues ---------------------------------------------------------------
+# Latent faults inherited from the legacy router and DELIBERATELY PRESERVED by this
+# migration.  Fixing any of them changes behaviour and is a separate, visible decision.
+[known_issues]
+
+dead_free_top_2022_11 = """\
+The legacy 'PRN00'..'PRN03' branch assigned \
+/auto/data/dlc/free_top_2022_11/config.yaml and then immediately overwrote it with \
+left_chimney_PRNfb-svd-2024-01-11 on the next line.  The first assignment was dead \
+code and never had any effect, so free_top_2022_11 is intentionally absent from this \
+registry."""
+
+rei_097_102_unroutable = """\
+REI sites 97 and 102 have headphone labels in \
+headphones_left_chimney_LB1_pokes-jcw-2025-04-22, but the legacy chain's headphone \
+branch requires site in [68, 70, 74], so those sites fall through to `raise \
+ValueError('No DLC model specified for this path')`.  The registry reproduces the \
+raise.  Whoever analyzed those sessions must have passed the config path explicitly."""
+
+eager_site_parse = """\
+The legacy function evaluated `sitenum = int(avipath.split('/')[5][3:])` BEFORE any \
+branch was tested.  Three consequences are preserved verbatim by \
+dlc_registry._site_number, which is called eagerly for the same reason:
+ (a) '/auto/data/daq/<Animal>/training/x.avi' raises ValueError on int('ning'), so the \
+     behavior_only rules ('LemonDisco/training', 'SlipperyJack/training') and the \
+     right_chimney_pokes 'StinkySquid/training2024' rule are UNREACHABLE through the \
+     router, even though ~70 .dlc.h5 files on disk came from free_train-svd-2023-09-26. \
+     Those must have been produced by passing the config path explicitly.
+ (b) A path with fewer than six '/'-separated components raises IndexError, not \
+     ValueError.
+ (c) 'video_pupil' is tested AFTER the eager int(), so a pupil video under a \
+     non-numeric penname raises instead of resolving to the `pupil` alias.
+The index 5 also hard-codes the /auto/data/daq/<animal>/<penname>/ layout: any path \
+not of that shape raises."""

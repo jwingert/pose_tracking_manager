@@ -1,0 +1,74 @@
+# Legacy attribution rules for DLC outputs produced before release stamping existed.
+#
+# Read by nems_lbhb/motor/dlc_attribution.py.  Stdlib + tomli only.
+#
+# WHY THIS FILE EXISTS.  A release's RELEASE.toml records its forensics in
+# `provenance_warning`, which is free prose.  Prose cannot attribute 552 files.  This
+# file makes those findings executable and reviewable in a diff.  Every rule quotes the
+# manifest sentence it came from.
+#
+# A SCORER MATCH IS EVIDENCE, NOT A CONCLUSION.  Several DLC networks in this lab emit
+# byte-identical scorer strings from different weights (defects 5 and 9).  Where that
+# happens, either an mtime cutoff separates them or the scorer is forced `ambiguous`.
+# Never let a scorer match speak for weights it cannot identify.
+
+schema_version = 1
+
+# --- mtime cutoffs ---------------------------------------------------------------
+# One scorer, two releases, separated by when the output was written.  `cutoff_utc` is
+# the moment the later weights began producing outputs; files at or after it are
+# `after`, files before are `before`.
+
+[[mtime_rules]]
+scorer = "DLC_resnet50_two_chimney3fbJan10shuffle1_60000"
+cutoff_utc = "2024-01-12T12:08:00Z"
+before = "two_chimney-r0001"
+after = "two_chimney-r0002"
+evidence = """\
+DEFECT 9: snapshot-60000 exists in BOTH iteration-0 (md5 3386f312..., built 2024-01-10 \
+17:38) and iteration-1 (md5 55f0fc27..., built 2024-01-12 12:08) of this project, and \
+BOTH emit the byte-identical scorer DLC_resnet50_two_chimney3fbJan10shuffle1_60000. \
+Splitting the 55 live outputs by mtime: 42 predate 2024-01-12 12:08 and came from \
+iteration-0; 13 came from iteration-1.  -- two_chimney-r0002 RELEASE.toml"""
+
+[[mtime_rules]]
+scorer = "DLC_resnet50_headphones_left_chimney_LB1_pokesApr22shuffle1_60000"
+cutoff_utc = "2025-12-22T00:00:00Z"
+before = "left_chimney_headphones-r0001"
+after = "left_chimney_headphones-r0003"
+evidence = """\
+iteration-0 was trained on 160 REI-only frames (2025-04-23).  iteration-1's training set \
+was regenerated 2025-12-22 to 760 frames (REI 680 + SQD 80).  Both emit \
+...Apr22shuffle1_60000.  All 28 live outputs carry mtimes 2025-12-09 and 2025-12-16, \
+before the regeneration, so all 28 are iteration-0 = r0001; r0003 (iteration-1, 60000) \
+has zero existing outputs.  -- left_chimney_headphones-r0001/-r0003 RELEASE.toml"""
+
+# --- forced ambiguous ------------------------------------------------------------
+# The scorer matches exactly one RELEASED network, but more than one set of weights
+# emitted it and no release freezes the others.  Attributing these would be a false
+# claim.  Delete an entry here only when the missing archive releases are cut, and
+# update the golden test in the same commit.
+
+[[forced_ambiguous]]
+scorer = "DLC_resnet50_eyecloseupJun22shuffle1_120000"
+candidates = ["pupil-r0001"]
+evidence = """\
+snapshot-120000 exists in iterations 2, 3 and 4 of the eyecloseup project with DIFFERENT \
+weights (md5 be38a2e1 / 1f830811 / 0f25ea98) and an identical scorer string (defect 9). \
+Splitting the 28 live outputs by mtime: 5 from iteration-2, 3 from iteration-3, 20 from \
+iteration-4.  Only iteration-4 is released (pupil-r0001), so 8 of the 28 cannot be \
+attributed.  Cut archive_pupil releases for iterations 2 and 3 to resolve this; both \
+still hold snapshot-120000 on disk (verified 2026-08-12).  -- pupil-r0001 RELEASE.toml"""
+
+# --- reproducibility -------------------------------------------------------------
+# Whether re-running a release reproduces the outputs attributed to it.  Absent means
+# reproducible; only losses are listed, each with its evidence.
+
+[reproducibility."left_chimney-r0001"]
+reproducible = false
+evidence = """\
+DAMAGED PROVENANCE (defect 2).  left_chimney_PRNfb was retrained in place on 2025-06-12 \
+into the same iteration-0/train/, destroying the 2024-01-11 weights.  The 65 live \
+sessions under this alias were analyzed with those destroyed weights and are NOT \
+reproducible from this release.  Every iteration-0 snapshot on disk now carries mtime \
+2025-06-12 (verified 2026-08-12).  -- left_chimney-r0001 RELEASE.toml"""
