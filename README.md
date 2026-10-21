@@ -90,4 +90,4 @@ Copied source files are preserved unchanged. Development and fixes continue in t
 
 ## Credits
 
-Developed in the [Laboratory of Brain, Hearing and Behavior](https://github.com/LBHB) as part of `nems_db`, using [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) for pose estimation. Existing source comments and attribution are retained. This snapshot does not introduce a new license for the copied lab code or its dependencies.
+Developed in the [Laboratory of Brain, Hearing and Behavior](https://github.com/LBHB) as part of `nems_db`, using [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) for pose estimation. Existing source comments and attribution are retained. See [LICENSE](LICENSE) for this repository's license; dependencies retain their respective licenses.
